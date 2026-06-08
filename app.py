@@ -60,18 +60,23 @@ st.markdown("""
 
 
 @st.cache_resource
-def load_model():
-    return YOLO("best.pt")
+def load_custom_model(model_path):
+    return YOLO(model_path)
 
-
-model = load_model()
-CLASS_NAMES = model.names
-
-st.title("🏗️ Ứng dụng AI Giám sát An toàn Lao động tại Công trường")
-st.markdown("---")
 
 # sidebar
 st.sidebar.header("⚙️ Cấu hình Hệ thống")
+
+selected_version = st.sidebar.selectbox(
+    "🤖 Chọn phiên bản Mô hình AI",
+    options=["YOLOv8 Nano (best.pt)", "YOLO11 Nano (best_yolo11.pt)"]
+)
+
+# Gán đường dẫn file trọng số tương ứng
+model_file = "best.pt" if "YOLOv8" in selected_version else "best_yolo11.pt"
+model = load_custom_model(model_file)
+CLASS_NAMES = model.names
+
 conf_threshold = st.sidebar.slider(
     "🎯 Độ tin cậy (Confidence)", 0.1, 1.0, 0.4, 0.05)
 dist_threshold = st.sidebar.slider(
@@ -125,11 +130,11 @@ if uploaded_file is not None:
         # Mảng lưu tọa độ tâm của những người đã bị chụp ảnh
         captured_violation_centers = []
 
-        # theo dõi thời gian bắt đầu vi phạm
+        # Từ điển theo dõi thời gian bắt đầu vi phạm của từng mục tiêu không gian
         # Cấu trúc lưu trữ: { (x_center, y_center): start_time_float }
         active_violation_trackers = {}
 
-        # Ngưỡng thời gian duy trì lỗi liên tục
+        # Ngưỡng thời gian duy trì lỗi liên tục (Xác nhận sau 1.5 giây vi phạm bền vững)
         CONFIRMATION_DELAY_SECONDS = 0.5
 
         # Vòng lặp phân tích từng khung hình của video
@@ -272,7 +277,6 @@ if uploaded_file is not None:
             res_placeholder.image(result_image, use_container_width=True)
 
             # TỰ ĐỘNG CHỤP ẢNH BẰNG CHỨNG
-            # Mảng lưu vết các vị trí vi phạm của frame hiện tại
             current_loop_violation_centers = []
             current_timestamp = time.time()
 
@@ -282,7 +286,6 @@ if uploaded_file is not None:
                     w_center = (int((wx1 + wx2) / 2), int((wy1 + wy2) / 2))
                     current_loop_violation_centers.append(w_center)
 
-                    # Kiểm tra xem người này có trùng với một mục tiêu đang nằm trong danh sách theo dõi trì hoãn hay không
                     matched_tracker_center = None
                     for tracked_center in list(active_violation_trackers.keys()):
                         spatial_dist = math.sqrt(
@@ -291,18 +294,15 @@ if uploaded_file is not None:
                             matched_tracker_center = tracked_center
                             break
 
-                    # Nếu là lỗi mới, tạo mốc thời gian bắt đầu ghi nhận lỗi
                     if matched_tracker_center is None:
                         active_violation_trackers[w_center] = current_timestamp
                         violation_duration = 0.0
                         tracker_key = w_center
                     else:
-                        # Nếu là lỗi liên tục duy trì từ frame trước, tính toán tổng thời gian đã vi phạm
                         violation_duration = current_timestamp - \
                             active_violation_trackers[matched_tracker_center]
                         tracker_key = matched_tracker_center
 
-                    # Chỉ tiến hành chụp ảnh khi lỗi được duy trì liên tục vượt ngưỡng CONFIRMATION_DELAY_SECONDS
                     if violation_duration >= CONFIRMATION_DELAY_SECONDS:
                         is_already_captured = False
                         for past_center in captured_violation_centers:
@@ -317,13 +317,11 @@ if uploaded_file is not None:
                             timestamp_str = time.strftime(
                                 '%H:%M:%S', time.localtime())
 
-                            # Lưu lại toàn thể khung hình (bản sao tĩnh kết quả)
                             list_evidence_images.insert(
                                 0, {"img": result_image.copy(), "time": timestamp_str, "type": worker['status']})
                             if len(list_evidence_images) > 8:
                                 list_evidence_images.pop()
 
-            # DỌN DẸP BỘ NHỚ THEO VẾT: Nếu một lỗi biến mất ở frame này (mô hình nhận diện nhầm đã hết), xóa khỏi bộ đếm trì hoãn
             for tracked_center in list(active_violation_trackers.keys()):
                 still_active = False
                 for current_center in current_loop_violation_centers:
@@ -348,7 +346,6 @@ if uploaded_file is not None:
                                 f"🚨 {ev_data['type']} | ⏰ {ev_data['time']}")
                             st.markdown('</div>', unsafe_allow_html=True)
 
-            # Cập nhật số liệu thay đổi theo luồng video
             kpi1_placeholder.metric(
                 label="✅ Công nhân AN TOÀN", value=violation_summary["SAFE"])
             kpi2_placeholder.metric(
@@ -412,7 +409,6 @@ if uploaded_file is not None:
             # quét lỗi vi phạm PPE
             for box in results.boxes:
                 lbl = CLASS_NAMES[int(box.cls[0])]
-                # lọc riêng các nhãn vi phạm
                 if lbl in ['NO-Hardhat', 'NO-Safety Vest']:
                     cx1, cy1, cx2, cy2 = box.xyxy[0].tolist()
                     c_center_x = (cx1 + cx2) / 2
